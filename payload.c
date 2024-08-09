@@ -58,7 +58,7 @@ void _putchar(char ch) {
     } else {
         debug_put_char_16(g_x * 8, g_y * 8, 0xFFFF, 0x0000, ch);
         g_x++;
-        if (g_x >= DISPLAY_W) {
+        if (g_x * 8 >= DISPLAY_W) {
             g_y++;
             g_x = 0;
         }
