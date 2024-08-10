@@ -100,9 +100,9 @@ int main() {
         /* patch out the smc #0 instruction, so we can re-enter the payload */
         for (uint32_t *addr = (uint32_t*)0x80010000; addr < (uint32_t*)0x81000000; ++addr) {
             if (*addr == 0xe1600070) {
+                *addr = 0x00000000;
                 /* clean dcache */
                 __asm__ volatile("mcr p15, 0, %0, c7, c10, 1" :: "r"(addr));
-                *addr = 0x00000000;
             }
         }
 
