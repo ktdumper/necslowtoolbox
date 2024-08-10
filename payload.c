@@ -21,7 +21,7 @@ typedef uint16_t u16;
 
 #include "font.c"
 #define DISPLAY_W 240
-#define VRAM_ADDR 0x80c9d000
+#define VRAM_ADDR (*(uint32_t*)0x480504bc)
 
 static void debug_put_char_16(int x, int y, u16 color, u16 bgc, u8 ch) {
     int 	i,j, l;
@@ -76,7 +76,7 @@ void hexdump(void *data, size_t sz) {
 }
 
 int main() {
-    uint32_t *fb = (void*)0x80c9d000;
+    uint32_t *fb = (void*)VRAM_ADDR;
     for (int i = 0; i < 0x10000; ++i)
         fb[i] = 0xAAAAAAAA;
 
