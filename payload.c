@@ -81,7 +81,7 @@ int main() {
         fb[i] = 0xAAAAAAAA;
 
     printf("nec slow overflow exploit\n\n");
-    hexdump((void*)0x80bd02f4, 0x400);
+    hexdump((void*)0x80bd02f4, 40);
 
     /* trigger reset */
     // volatile uint32_t *PRM_RSTCTRL = (void*)0x48307250;
