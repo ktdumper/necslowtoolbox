@@ -169,7 +169,7 @@ class Exploit:
                 assert self.dev.write(8, chunk) == len(chunk)
                 total += len(chunk)
         except Exception:
-            print("wrote 0x{:X} bytes at the moment of exception".format(total))
+            print("write_fully: wrote 0x{:X} bytes at the moment of exception".format(total))
             raise
 
     def comm_oneway(self, cmd, subcmd=0, variable_payload=None):
