@@ -21,7 +21,7 @@ typedef uint16_t u16;
 
 #include "font.c"
 #define DISPLAY_W 240
-#define VRAM_ADDR 0x80c9d000
+#define VRAM_ADDR (*(uint32_t*)0x480504bc)
 
 static void debug_put_char_16(int x, int y, u16 color, u16 bgc, u8 ch) {
     int 	i,j, l;
@@ -91,11 +91,12 @@ int main() {
     if (!once) {
         once = 1;
 
-        uint32_t *fb = (void*)0x80c9d000;
+        uint32_t *fb = (void*)VRAM_ADDR;
         for (int i = 0; i < 0x10000; ++i)
             fb[i] = 0x42424242;
 
         printf("nec dumper\n");
+        printf("LR=0x%p\n", __builtin_return_address(0));
 
         /* patch out the smc #0 instruction, so we can re-enter the payload */
         for (uint32_t *addr = (uint32_t*)0x80010000; addr < (uint32_t*)0x81000000; ++addr) {

@@ -205,9 +205,12 @@ class Exploit:
             except usb.core.USBTimeoutError:
                 print("Waiting...")
 
+        filename = "dump-0x{:X}-0x{:X}.bin".format(self.args.dump_addr, self.args.dump_size)
+        print("Dumping to {}".format(filename))
+
         sync = 0x42
         with tqdm(total=self.args.dump_size, unit='B', unit_scale=True, unit_divisor=1024) as bar:
-            with open("dump-0x{:X}-0x{:X}.bin".format(self.args.dump_addr, self.args.dump_size), "wb") as outf:
+            with open(filename, "wb") as outf:
                 for x in range(self.args.dump_size // 32):
                     self.cmd_exec()
                     data = bytearray(self.dev.ctrl_transfer(0x80, 0x06, 0x0200, 0x00, 0x40))[2:]
